@@ -28,15 +28,33 @@ def population_stability_index(expected, actual, bins=10):
     - 0.1 <= PSI < 0.25 -> moderate shift, worth a look
     - PSI >= 0.25 -> significant shift
 
-    Returns 0.0 if the reference sample has too little variation to bin
-    meaningfully (e.g. a near-constant feature), rather than raising.
+    NaN/inf values are dropped from each sample before binning, so a few
+    missing values don't distort the whole calculation. If the reference
+    sample has too little variation to bin meaningfully (e.g. a constant
+    feature), PSI falls back to a simple "did the value change at all"
+    check rather than silently reporting 0.0 for a feature that may have
+    shifted entirely (e.g. a constant 1 in training vs. a constant 100 in
+    the comparison sample).
     """
     expected = np.asarray(expected, dtype=float)
     actual = np.asarray(actual, dtype=float)
 
+    expected = expected[np.isfinite(expected)]
+    actual = actual[np.isfinite(actual)]
+
+    if len(expected) == 0 or len(actual) == 0:
+        return 0.0
+
     cut_points = np.unique(np.percentile(expected, np.linspace(0, 100, bins + 1)))
     if len(cut_points) < 3:
-        return 0.0
+        # Not enough variation in `expected` to bin meaningfully (e.g. a
+        # constant or near-constant feature). Fall back to comparing means
+        # directly so a real shift (e.g. constant-to-constant at a
+        # different value) is still flagged rather than reported as stable.
+        expected_value = float(np.mean(expected))
+        actual_value = float(np.mean(actual))
+        tolerance = max(1e-9, abs(expected_value) * 1e-6)
+        return 0.0 if abs(actual_value - expected_value) <= tolerance else 1.0
 
     # Widen the outer edges slightly so min/max values of `actual` aren't dropped.
     cut_points[0] -= 1e-6
@@ -70,6 +88,7 @@ def dataset_drift(X_expected, X_actual, feature_names=None, bins=10):
         The comparison split, typically validation or test data.
     feature_names : list[str], optional
         Names for each column; defaults to "feature_0", "feature_1", ...
+        Must match the number of columns in ``X_expected`` if provided.
     bins : int, default=10
         Number of bins used for the PSI calculation.
 
@@ -78,9 +97,12 @@ def dataset_drift(X_expected, X_actual, feature_names=None, bins=10):
     dict
         ``{"available": True, "features": [...]}`` where each entry is
         ``{"feature": str, "psi": float, "status": str}``, sorted by PSI
-        descending (most-drifted feature first). Non-numeric columns are
-        skipped rather than raising. Returns ``{"available": False,
-        "reason": str}`` if the two splits don't share a comparable shape.
+        descending (most-drifted feature first). Returns
+        ``{"available": False, "reason": str}`` instead of raising if:
+        the dataset contains non-numeric values (the whole comparison is
+        currently unsupported in that case, not skipped per-column),
+        the two splits have a different number of features, either split
+        has zero rows, or ``feature_names`` doesn't match the column count.
     """
     try:
         X_expected = np.asarray(X_expected, dtype=float)
@@ -93,8 +115,14 @@ def dataset_drift(X_expected, X_actual, feature_names=None, bins=10):
     if X_actual.ndim == 1:
         X_actual = X_actual.reshape(-1, 1)
 
+    if X_expected.shape[0] == 0 or X_actual.shape[0] == 0:
+        return {"available": False, "reason": "one of the splits has zero rows"}
+
     if X_expected.shape[1] != X_actual.shape[1]:
         return {"available": False, "reason": "splits have a different number of features"}
+
+    if feature_names is not None and len(feature_names) != X_expected.shape[1]:
+        return {"available": False, "reason": "feature_names length does not match the number of columns"}
 
     names = list(feature_names) if feature_names else [f"feature_{i}" for i in range(X_expected.shape[1])]
 

@@ -17,6 +17,6 @@ def plot_drift(features, top_n=20):
     ax.axvline(0.1, linestyle="--", color="gray", linewidth=1)
     ax.axvline(0.25, linestyle="--", color="gray", linewidth=1)
     ax.set_xlabel("Population Stability Index (PSI)")
-    ax.set_title("Train vs. test distribution drift")
+    ax.set_title("Feature distribution drift")
     fig.tight_layout()
     return fig
