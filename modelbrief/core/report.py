@@ -83,7 +83,9 @@ class ModelBrief:
 
   c=self.context; yref=c.train.y if c.train.y is not None else (c.test.y if c.test.y is not None else c.validation.y); task=detect_task(c.model,yref,c.task); r=ReportResult(metadata={"task":task,"library_version":"0.2.2"})
 
-  r.add("MODEL OVERVIEW",model_overview(c.model,self.adapter,task)); r.add("DATASET",{"train":describe_dataset(c.train.X,c.train.y),"validation":describe_dataset(c.validation.X,c.validation.y),"test":describe_dataset(c.test.X,c.test.y)}); r.add("TASK",{"detected_or_requested":task}); r.add("PARAMETERS",self.adapter.parameters())
+  drift=self._drift(c)
+
+  r.add("MODEL OVERVIEW",model_overview(c.model,self.adapter,task)); r.add("DATASET",{"train":describe_dataset(c.train.X,c.train.y),"validation":describe_dataset(c.validation.X,c.validation.y),"test":describe_dataset(c.test.X,c.test.y)}); r.add("DATA DRIFT",drift); r.add("TASK",{"detected_or_requested":task}); r.add("PARAMETERS",self.adapter.parameters())
 
   fi=self.adapter.feature_importance(c.feature_names)
 
@@ -107,7 +109,7 @@ class ModelBrief:
 
   r.add("ERROR ANALYSIS",self._errors(task,c.test if c.test.X is not None else c.validation if c.validation.X is not None else c.train))
 
-  self._figures(r,fi,cm,task,c)
+  self._figures(r,fi,cm,task,c,drift)
 
   if self.ai:
 
@@ -120,6 +122,20 @@ class ModelBrief:
    provider=GroqProvider(); r.add("AI EXPLANATION",{"text":explain(r,provider)}); r.recommendations.append(recommend(r,provider))
 
   self._result=r; return r
+
+ def _drift(self,c):
+
+  reference=c.train; comparison=c.test if c.test.X is not None else c.validation
+
+  if reference.X is None or comparison.X is None:
+
+   return {"available":False,"reason":"requires both training data and a validation or test split"}
+
+  try:
+
+   from ..metrics.drift import dataset_drift; return dataset_drift(reference.X,comparison.X,c.feature_names)
+
+  except Exception as e: return {"available":False,"reason":f"{type(e).__name__}: {e}"}
 
  def _errors(self,task,split):
 
@@ -143,7 +159,7 @@ class ModelBrief:
 
   import matplotlib.pyplot as plt; plt.close(fig)
 
- def _figures(self,r,fi,cm,task,c):
+ def _figures(self,r,fi,cm,task,c,drift=None):
 
   try:
 
@@ -154,6 +170,10 @@ class ModelBrief:
    if cm:
 
     from ..visualization.confusion_matrix import plot_confusion_matrix; self._add_fig(r,plot_confusion_matrix(cm,c.target_names),"Confusion matrix")
+
+   if drift and drift.get("available") and drift.get("features"):
+
+    from ..visualization.drift import plot_drift; self._add_fig(r,plot_drift(drift["features"]),"Data drift")
 
    split=c.test if c.test.X is not None else c.validation
 
